@@ -12,11 +12,16 @@ app.use((req, res, next) => {
 app.use(express.json());
 
 // 🔥 conexão com Postgres
+const { Pool } = require('pg');
+
+if (!process.env.DATABASE_URL) {
+  console.error("❌ DATABASE_URL não definida");
+  process.exit(1);
+}
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL.includes('railway')
-    ? { rejectUnauthorized: false }
-    : false
+  ssl: { rejectUnauthorized: false }
 });
 // 🔥 cria tabela automaticamente
 async function criarTabela() {
