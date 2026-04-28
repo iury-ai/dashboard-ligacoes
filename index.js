@@ -14,9 +14,10 @@ app.use(express.json());
 // 🔥 conexão com Postgres
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
+  ssl: process.env.DATABASE_URL.includes('railway')
+    ? { rejectUnauthorized: false }
+    : false
 });
-
 // 🔥 cria tabela automaticamente
 async function criarTabela() {
   await pool.query(`
