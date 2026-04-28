@@ -11,6 +11,16 @@ app.use(express.json());
 
 const ligacoes = [];
 
+function hojeStr() {
+  return new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Fortaleza' });
+}
+
+function dataDaLigacao(ligacao) {
+  const dt = ligacao.inicio || ligacao.startedAt;
+  if (!dt) return null;
+  return new Date(dt.replace(' ', 'T')).toLocaleDateString('pt-BR', { timeZone: 'America/Fortaleza' });
+}
+
 app.post('/webhook', (req, res) => {
   const chamada = req.body;
   ligacoes.push({
@@ -27,7 +37,12 @@ app.post('/webhook', (req, res) => {
 });
 
 app.get('/dados', (req, res) => {
-  res.json({ total: ligacoes.length, ligacoes });
+  const data = req.query.data; // formato: DD/MM/YYYY
+  const filtradas = data
+    ? ligacoes.filter(l => dataDaLigacao(l) === data)
+    : ligacoes.filter(l => dataDaLigacao(l) === hojeStr());
+
+  res.json({ total: filtradas.length, ligacoes: filtradas, data: data || hojeStr() });
 });
 
 app.get('/', (req, res) => {
