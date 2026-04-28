@@ -12,8 +12,6 @@ app.use((req, res, next) => {
 app.use(express.json());
 
 // 🔥 conexão com Postgres
-const { Pool } = require('pg');
-
 if (!process.env.DATABASE_URL) {
   console.error("❌ DATABASE_URL não definida");
   process.exit(1);
@@ -23,23 +21,29 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
+
 // 🔥 cria tabela automaticamente
 async function criarTabela() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS ligacoes (
-      id SERIAL PRIMARY KEY,
-      ligacao_id TEXT UNIQUE,
-      inicio TIMESTAMP,
-      fim TIMESTAMP,
-      duracao INTEGER,
-      atendida BOOLEAN,
-      origem TEXT,
-      destino TEXT,
-      criado_em TIMESTAMP DEFAULT NOW()
-    );
-  `);
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS ligacoes (
+        id SERIAL PRIMARY KEY,
+        ligacao_id TEXT UNIQUE,
+        inicio TIMESTAMP,
+        fim TIMESTAMP,
+        duracao INTEGER,
+        atendida BOOLEAN,
+        origem TEXT,
+        destino TEXT,
+        criado_em TIMESTAMP DEFAULT NOW()
+      );
+    `);
 
-  console.log("✅ tabela pronta");
+    console.log("✅ tabela pronta");
+
+  } catch (err) {
+    console.error("❌ erro ao criar tabela:", err.message);
+  }
 }
 
 criarTabela();
