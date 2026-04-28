@@ -1,4 +1,6 @@
 const express = require('express');
+const { Pool } = require('pg');
+
 const app = express();
 
 app.use((req, res, next) => {
@@ -9,44 +11,108 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
-const ligacoes = [];
+// 🔥 conexão com Postgres
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
 
+// 🔥 cria tabela automaticamente
+async function criarTabela() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ligacoes (
+      id SERIAL PRIMARY KEY,
+      ligacao_id TEXT UNIQUE,
+      inicio TIMESTAMP,
+      fim TIMESTAMP,
+      duracao INTEGER,
+      atendida BOOLEAN,
+      origem TEXT,
+      destino TEXT,
+      criado_em TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
+  console.log("✅ tabela pronta");
+}
+
+criarTabela();
+
+// helpers
 function hojeStr() {
   return new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Fortaleza' });
 }
 
-function dataDaLigacao(ligacao) {
-  const dt = ligacao.inicio || ligacao.startedAt;
-  if (!dt) return null;
-  return new Date(dt.replace(' ', 'T')).toLocaleDateString('pt-BR', { timeZone: 'America/Fortaleza' });
-}
-
-app.post('/webhook', (req, res) => {
+// 🔥 SALVAR NO BANCO
+app.post('/webhook', async (req, res) => {
   const chamada = req.body;
-  ligacoes.push({
-    id: chamada.id,
-    inicio: chamada.startedAt,
-    fim: chamada.endedAt,
-    duracao: chamada.duration,
-    atendida: chamada.answeredAt ? true : false,
-    origem: chamada.caller,
-    destino: chamada.called,
-  });
-  console.log('Nova ligação recebida:', chamada.id);
-  res.status(200).json({ ok: true });
+
+  try {
+    await pool.query(
+      `INSERT INTO ligacoes 
+      (ligacao_id, inicio, fim, duracao, atendida, origem, destino)
+      VALUES ($1,$2,$3,$4,$5,$6,$7)
+      ON CONFLICT (ligacao_id) DO NOTHING`,
+      [
+        chamada.id,
+        chamada.startedAt,
+        chamada.endedAt,
+        chamada.duration,
+        chamada.answeredAt ? true : false,
+        chamada.caller,
+        chamada.called
+      ]
+    );
+
+    console.log('Nova ligação salva:', chamada.id);
+    res.status(200).json({ ok: true });
+
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ erro: 'erro ao salvar' });
+  }
 });
 
-app.get('/dados', (req, res) => {
-  const data = req.query.data; // formato: DD/MM/YYYY
-  const filtradas = data
-    ? ligacoes.filter(l => dataDaLigacao(l) === data)
-    : ligacoes.filter(l => dataDaLigacao(l) === hojeStr());
+// 🔥 BUSCAR DO BANCO
+app.get('/dados', async (req, res) => {
+  const data = req.query.data;
 
-  res.json({ total: filtradas.length, ligacoes: filtradas, data: data || hojeStr() });
+  try {
+    let query;
+    let values;
+
+    if (data) {
+      query = `
+        SELECT * FROM ligacoes
+        WHERE DATE(inicio) = TO_DATE($1, 'DD/MM/YYYY')
+        ORDER BY inicio DESC
+      `;
+      values = [data];
+    } else {
+      query = `
+        SELECT * FROM ligacoes
+        WHERE DATE(inicio) = CURRENT_DATE
+        ORDER BY inicio DESC
+      `;
+      values = [];
+    }
+
+    const result = await pool.query(query, values);
+
+    res.json({
+      total: result.rows.length,
+      ligacoes: result.rows,
+      data: data || hojeStr()
+    });
+
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ erro: 'erro ao buscar' });
+  }
 });
 
 app.get('/', (req, res) => {
-  res.send('Servidor de ligações rodando!');
+  res.send('Servidor com Postgres rodando 🚀');
 });
 
 const PORT = process.env.PORT || 8080;
