@@ -1,6 +1,4 @@
 const express = require('express');
-const { Pool } = require('pg');
-
 const app = express();
 
 app.use((req, res, next) => {
@@ -11,118 +9,68 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
-// 🔥 conexão com Postgres
-if (!process.env.DATABASE_URL) {
-  console.error("❌ DATABASE_URL não definida");
-  process.exit(1);
+const ligacoes = [];
+
+function toData(dt) {
+  if (!dt) return null;
+  return new Date(dt.replace(' ', 'T'));
 }
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
-});
-
-// 🔥 cria tabela automaticamente
-async function criarTabela() {
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS ligacoes (
-        id SERIAL PRIMARY KEY,
-        ligacao_id TEXT UNIQUE,
-        inicio TIMESTAMP,
-        fim TIMESTAMP,
-        duracao INTEGER,
-        atendida BOOLEAN,
-        origem TEXT,
-        destino TEXT,
-        criado_em TIMESTAMP DEFAULT NOW()
-      );
-    `);
-
-    console.log("✅ tabela pronta");
-
-  } catch (err) {
-    console.error("❌ erro ao criar tabela:", err.message);
-  }
+function dataFortaleza(date) {
+  return new Date(date.toLocaleString('en-US', { timeZone: 'America/Fortaleza' }));
 }
 
-criarTabela();
-
-// helpers
-function hojeStr() {
-  return new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Fortaleza' });
-}
-
-// 🔥 SALVAR NO BANCO
-app.post('/webhook', async (req, res) => {
+app.post('/webhook', (req, res) => {
   const chamada = req.body;
-
-  try {
-    await pool.query(
-      `INSERT INTO ligacoes 
-      (ligacao_id, inicio, fim, duracao, atendida, origem, destino)
-      VALUES ($1,$2,$3,$4,$5,$6,$7)
-      ON CONFLICT (ligacao_id) DO NOTHING`,
-      [
-        chamada.id,
-        chamada.startedAt,
-        chamada.endedAt,
-        chamada.duration,
-        chamada.answeredAt ? true : false,
-        chamada.caller,
-        chamada.called
-      ]
-    );
-
-    console.log('Nova ligação salva:', chamada.id);
-    res.status(200).json({ ok: true });
-
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ erro: 'erro ao salvar' });
-  }
+  ligacoes.push({
+    id: chamada.id,
+    inicio: chamada.startedAt,
+    fim: chamada.endedAt,
+    duracao: chamada.duration,
+    atendida: chamada.answeredAt ? true : false,
+    origem: chamada.caller,
+    destino: chamada.called,
+  });
+  console.log('Nova ligação recebida:', chamada.id);
+  res.status(200).json({ ok: true });
 });
 
-// 🔥 BUSCAR DO BANCO
-app.get('/dados', async (req, res) => {
-  const data = req.query.data;
+app.get('/dados', (req, res) => {
+  const { periodo, data, mes, ano } = req.query;
+  const agora = dataFortaleza(new Date());
 
-  try {
-    let query;
-    let values;
+  let filtradas = ligacoes.filter(l => {
+    const d = toData(l.inicio);
+    if (!d) return false;
+    const df = dataFortaleza(d);
 
-    if (data) {
-      query = `
-        SELECT * FROM ligacoes
-        WHERE DATE(inicio) = TO_DATE($1, 'DD/MM/YYYY')
-        ORDER BY inicio DESC
-      `;
-      values = [data];
-    } else {
-      query = `
-        SELECT * FROM ligacoes
-        WHERE DATE(inicio) = CURRENT_DATE
-        ORDER BY inicio DESC
-      `;
-      values = [];
+    if (periodo === 'semana') {
+      const diaSemana = agora.getDay();
+      const seg = new Date(agora);
+      seg.setDate(agora.getDate() - (diaSemana === 0 ? 6 : diaSemana - 1));
+      seg.setHours(0, 0, 0, 0);
+      return df >= seg;
     }
 
-    const result = await pool.query(query, values);
+    if (periodo === 'mes') {
+      const m = mes ? parseInt(mes) - 1 : agora.getMonth();
+      const a = ano ? parseInt(ano) : agora.getFullYear();
+      return df.getMonth() === m && df.getFullYear() === a;
+    }
 
-    res.json({
-      total: result.rows.length,
-      ligacoes: result.rows,
-      data: data || hojeStr()
-    });
+    // padrão: dia
+    const alvo = data
+      ? (() => { const [d,m,a] = data.split('/'); return `${a}-${m}-${d}`; })()
+      : agora.toISOString().slice(0, 10);
+    const dfStr = df.toISOString().slice(0, 10);
+    return dfStr === alvo;
+  });
 
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ erro: 'erro ao buscar' });
-  }
+  res.json({ total: filtradas.length, ligacoes: filtradas });
 });
 
 app.get('/', (req, res) => {
-  res.send('Servidor com Postgres rodando 🚀');
+  res.send('Servidor de ligações rodando!');
 });
 
 const PORT = process.env.PORT || 8080;
