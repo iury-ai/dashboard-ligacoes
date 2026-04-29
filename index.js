@@ -56,30 +56,62 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.get('/dados', async (req, res) => {
-  const { periodo } = req.query;
+  const { periodo, mes, ano } = req.query;
+  const tz = `AT TIME ZONE 'America/Fortaleza'`;
+
   try {
     let query;
+
+    if (periodo === 'semanas-do-mes') {
+      // todas as semanas do mês atual, agrupadas por semana
+      query = `
+        SELECT
+          date_trunc('week', (inicio ${tz})::timestamp) AS semana,
+          COUNT(*) AS total,
+          COUNT(*) FILTER (WHERE atendida = true AND duracao > 0) AS atendidas,
+          COUNT(DISTINCT id) AS unicas
+        FROM ligacoes
+        WHERE inicio >= date_trunc('month', NOW() ${tz})
+          AND inicio < date_trunc('month', NOW() ${tz}) + INTERVAL '1 month'
+        GROUP BY semana
+        ORDER BY semana
+      `;
+      const result = await pool.query(query);
+      return res.json({ semanas: result.rows });
+    }
+
+    if (periodo === 'mes') {
+      const m = mes ? parseInt(mes) : new Date().getMonth() + 1;
+      const a = ano ? parseInt(ano) : new Date().getFullYear();
+      query = `
+        SELECT * FROM ligacoes
+        WHERE EXTRACT(MONTH FROM inicio ${tz}) = $1
+          AND EXTRACT(YEAR FROM inicio ${tz}) = $2
+        ORDER BY inicio DESC
+      `;
+      const result = await pool.query(query, [m, a]);
+      return res.json({ total: result.rows.length, ligacoes: result.rows, mes: m, ano: a });
+    }
+
     if (periodo === 'semana') {
       query = `
         SELECT * FROM ligacoes
-        WHERE inicio >= date_trunc('week', NOW() AT TIME ZONE 'America/Fortaleza')
+        WHERE inicio >= date_trunc('week', NOW() ${tz})
         ORDER BY inicio DESC
       `;
-    } else if (periodo === 'mes') {
-      query = `
-        SELECT * FROM ligacoes
-        WHERE inicio >= date_trunc('month', NOW() AT TIME ZONE 'America/Fortaleza')
-        ORDER BY inicio DESC
-      `;
-    } else {
-      query = `
-        SELECT * FROM ligacoes
-        WHERE inicio >= (NOW() AT TIME ZONE 'America/Fortaleza')::date
-        ORDER BY inicio DESC
-      `;
+      const result = await pool.query(query);
+      return res.json({ total: result.rows.length, ligacoes: result.rows });
     }
+
+    // padrão: dia
+    query = `
+      SELECT * FROM ligacoes
+      WHERE (inicio ${tz})::date = (NOW() ${tz})::date
+      ORDER BY inicio DESC
+    `;
     const result = await pool.query(query);
-    res.json({ total: result.rows.length, ligacoes: result.rows });
+    return res.json({ total: result.rows.length, ligacoes: result.rows });
+
   } catch (e) {
     console.error('Erro ao buscar:', e.message);
     res.status(500).json({ erro: e.message });
