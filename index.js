@@ -1,4 +1,6 @@
 const express = require('express');
+const { Pool } = require('pg');
+
 const app = express();
 
 app.use((req, res, next) => {
@@ -9,64 +11,79 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
-const ligacoes = [];
-
-function toData(dt) {
-  if (!dt) return null;
-  return new Date(dt.replace(' ', 'T'));
-}
-
-function dataFortaleza(date) {
-  return new Date(date.toLocaleString('en-US', { timeZone: 'America/Fortaleza' }));
-}
-
-app.post('/webhook', (req, res) => {
-  const chamada = req.body;
-  ligacoes.push({
-    id: chamada.id,
-    inicio: chamada.startedAt,
-    fim: chamada.endedAt,
-    duracao: chamada.duration,
-    atendida: chamada.answeredAt ? true : false,
-    origem: chamada.caller,
-    destino: chamada.called,
-  });
-  console.log('Nova ligação recebida:', chamada.id);
-  res.status(200).json({ ok: true });
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL || 'postgresql://postgres:xALIjzqexAuGQJJbPvnrGGbdrTVFjywM@postgres.railway.internal:5432/railway',
+  ssl: false
 });
 
-app.get('/dados', (req, res) => {
-  const { periodo, data, mes, ano } = req.query;
-  const agora = dataFortaleza(new Date());
+async function init() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ligacoes (
+      id TEXT,
+      inicio TIMESTAMP,
+      fim TIMESTAMP,
+      duracao INTEGER,
+      atendida BOOLEAN,
+      origem TEXT,
+      destino TEXT
+    )
+  `);
+  console.log('Banco pronto!');
+}
 
-  let filtradas = ligacoes.filter(l => {
-    const d = toData(l.inicio);
-    if (!d) return false;
-    const df = dataFortaleza(d);
+app.post('/webhook', async (req, res) => {
+  const c = req.body;
+  try {
+    await pool.query(
+      `INSERT INTO ligacoes (id, inicio, fim, duracao, atendida, origem, destino)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [
+        c.id,
+        c.startedAt || null,
+        c.endedAt || null,
+        c.duration ? parseInt(c.duration) : 0,
+        c.answeredAt ? true : false,
+        c.caller || null,
+        c.called || null
+      ]
+    );
+    console.log('Ligação salva:', c.id);
+    res.status(200).json({ ok: true });
+  } catch (e) {
+    console.error('Erro ao salvar:', e.message);
+    res.status(500).json({ erro: e.message });
+  }
+});
 
+app.get('/dados', async (req, res) => {
+  const { periodo } = req.query;
+  try {
+    let query;
     if (periodo === 'semana') {
-      const diaSemana = agora.getDay();
-      const seg = new Date(agora);
-      seg.setDate(agora.getDate() - (diaSemana === 0 ? 6 : diaSemana - 1));
-      seg.setHours(0, 0, 0, 0);
-      return df >= seg;
+      query = `
+        SELECT * FROM ligacoes
+        WHERE inicio >= date_trunc('week', NOW() AT TIME ZONE 'America/Fortaleza')
+        ORDER BY inicio DESC
+      `;
+    } else if (periodo === 'mes') {
+      query = `
+        SELECT * FROM ligacoes
+        WHERE inicio >= date_trunc('month', NOW() AT TIME ZONE 'America/Fortaleza')
+        ORDER BY inicio DESC
+      `;
+    } else {
+      query = `
+        SELECT * FROM ligacoes
+        WHERE inicio >= (NOW() AT TIME ZONE 'America/Fortaleza')::date
+        ORDER BY inicio DESC
+      `;
     }
-
-    if (periodo === 'mes') {
-      const m = mes ? parseInt(mes) - 1 : agora.getMonth();
-      const a = ano ? parseInt(ano) : agora.getFullYear();
-      return df.getMonth() === m && df.getFullYear() === a;
-    }
-
-    // padrão: dia
-    const alvo = data
-      ? (() => { const [d,m,a] = data.split('/'); return `${a}-${m}-${d}`; })()
-      : agora.toISOString().slice(0, 10);
-    const dfStr = df.toISOString().slice(0, 10);
-    return dfStr === alvo;
-  });
-
-  res.json({ total: filtradas.length, ligacoes: filtradas });
+    const result = await pool.query(query);
+    res.json({ total: result.rows.length, ligacoes: result.rows });
+  } catch (e) {
+    console.error('Erro ao buscar:', e.message);
+    res.status(500).json({ erro: e.message });
+  }
 });
 
 app.get('/', (req, res) => {
@@ -74,6 +91,6 @@ app.get('/', (req, res) => {
 });
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
+init().then(() => {
+  app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
 });
